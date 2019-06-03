@@ -276,9 +276,10 @@ func (r *Router) recv(w http.ResponseWriter, req *http.Request) {
 // If the path was found, it returns the handle function and the path parameter
 // values. Otherwise the third return value indicates whether a redirection to
 // the same path with an extra / without the trailing slash should be performed.
-func (r *Router) Lookup(method, path string) (Handle, Params, bool) {
+func (r *Router) Lookup(method, path string) (h Handle, p Params, tsr bool) {
 	if root := r.trees[method]; root != nil {
-		return root.getValue(path)
+		h, p, tsr, _ = root.getValue(path)
+		return h, p, tsr
 	}
 	return nil, nil, false
 }
@@ -304,7 +305,7 @@ func (r *Router) allowed(path, reqMethod string) (allow string) {
 				continue
 			}
 
-			handle, _, _ := r.trees[method].getValue(path)
+			handle, _, _, _ := r.trees[method].getValue(path)
 			if handle != nil {
 				// add request method to list of allowed methods
 				if len(allow) == 0 {
@@ -330,8 +331,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	path := req.URL.Path
 
 	if root := r.trees[req.Method]; root != nil {
-		if handle, ps, tsr := root.getValue(path); handle != nil {
-			handle(w, req, ps)
+		if handle, ps, tsr, n := root.getValue(path); handle != nil {
+			handle(w, upgradeCtx(req, n), ps)
 			return
 		} else if req.Method != "CONNECT" && path != "/" {
 			code := 301 // Permanent redirect, request with GET method

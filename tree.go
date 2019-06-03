@@ -41,14 +41,16 @@ const (
 )
 
 type node struct {
-	path      string
-	wildChild bool
-	nType     nodeType
-	maxParams uint8
-	indices   string
-	children  []*node
-	handle    Handle
-	priority  uint32
+	path       string
+	pathFull   string
+	wildChild  bool
+	nType      nodeType
+	maxParams  uint8
+	indices    string
+	children   []*node
+	handle     Handle
+	handleName string
+	priority   uint32
 }
 
 // increments priority of the given child and reorders if necessary
@@ -103,13 +105,15 @@ func (n *node) addRoute(path string, handle Handle) {
 			// Split edge
 			if i < len(n.path) {
 				child := node{
-					path:      n.path[i:],
-					wildChild: n.wildChild,
-					nType:     static,
-					indices:   n.indices,
-					children:  n.children,
-					handle:    n.handle,
-					priority:  n.priority - 1,
+					path:       n.path[i:],
+					wildChild:  n.wildChild,
+					nType:      static,
+					indices:    n.indices,
+					children:   n.children,
+					handle:     n.handle,
+					priority:   n.priority - 1,
+					handleName: n.handleName,
+					pathFull:   n.pathFull,
 				}
 
 				// Update maxParams (max of all children)
@@ -125,6 +129,8 @@ func (n *node) addRoute(path string, handle Handle) {
 				n.path = path[:i]
 				n.handle = nil
 				n.wildChild = false
+				n.handleName = ""
+				n.pathFull = ""
 			}
 
 			// Make new node a child of this node
@@ -312,7 +318,6 @@ func (n *node) insertChild(numParams uint8, path, fullPath string, handle Handle
 				priority:  1,
 			}
 			n.children = []*node{child}
-
 			return
 		}
 	}
@@ -320,6 +325,8 @@ func (n *node) insertChild(numParams uint8, path, fullPath string, handle Handle
 	// insert remaining path part and handle to the leaf
 	n.path = path[offset:]
 	n.handle = handle
+	n.handleName = name(handle)
+	n.pathFull = fullPath
 }
 
 // Returns the handle registered with the given path (key). The values of
@@ -327,7 +334,12 @@ func (n *node) insertChild(numParams uint8, path, fullPath string, handle Handle
 // If no handle can be found, a TSR (trailing slash redirect) recommendation is
 // made if a handle exists with an extra (without the) trailing slash for the
 // given path.
-func (n *node) getValue(path string) (handle Handle, p Params, tsr bool) {
+func (n *node) getValue(path string) (Handle, Params, bool, *node) {
+	var (
+		handle Handle
+		p      Params
+		tsr    bool
+	)
 walk: // outer loop for walking the tree
 	for {
 		if len(path) > len(n.path) {
@@ -348,8 +360,8 @@ walk: // outer loop for walking the tree
 					// Nothing found.
 					// We can recommend to redirect to the same URL without a
 					// trailing slash if a leaf exists for that path.
-					tsr = (path == "/" && n.handle != nil)
-					return
+					tsr = path == "/" && n.handle != nil
+					return handle, p, tsr, n
 
 				}
 
@@ -383,19 +395,18 @@ walk: // outer loop for walking the tree
 
 						// ... but we can't
 						tsr = (len(path) == end+1)
-						return
+						return handle, p, tsr, n
 					}
 
 					if handle = n.handle; handle != nil {
-						return
+						return handle, p, tsr, n
 					} else if len(n.children) == 1 {
 						// No handle found. Check if a handle for this path + a
 						// trailing slash exists for TSR recommendation
 						n = n.children[0]
 						tsr = (n.path == "/" && n.handle != nil)
 					}
-
-					return
+					return handle, p, tsr, n
 
 				case catchAll:
 					// save param value
@@ -409,7 +420,7 @@ walk: // outer loop for walking the tree
 					p[i].Value = path
 
 					handle = n.handle
-					return
+					return handle, p, tsr, n
 
 				default:
 					panic("invalid node type")
@@ -419,12 +430,12 @@ walk: // outer loop for walking the tree
 			// We should have reached the node containing the handle.
 			// Check if this node has a handle registered.
 			if handle = n.handle; handle != nil {
-				return
+				return handle, p, tsr, n
 			}
 
 			if path == "/" && n.wildChild && n.nType != root {
 				tsr = true
-				return
+				return handle, p, tsr, n
 			}
 
 			// No handle found. Check if a handle for this path + a
@@ -434,11 +445,10 @@ walk: // outer loop for walking the tree
 					n = n.children[i]
 					tsr = (len(n.path) == 1 && n.handle != nil) ||
 						(n.nType == catchAll && n.children[0].handle != nil)
-					return
+					return handle, p, tsr, n
 				}
 			}
-
-			return
+			return handle, p, tsr, n
 		}
 
 		// Nothing found. We can recommend to redirect to the same URL with an
@@ -446,7 +456,7 @@ walk: // outer loop for walking the tree
 		tsr = (path == "/") ||
 			(len(n.path) == len(path)+1 && n.path[len(path)] == '/' &&
 				path == n.path[:len(n.path)-1] && n.handle != nil)
-		return
+		return handle, p, tsr, n
 	}
 }
 
